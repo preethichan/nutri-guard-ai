@@ -75,8 +75,15 @@ python -m src.rag.chat                           # interactive loop
 python -m src.rag.chat --once "question here"    # single turn
 
 # Chat with the baseline assistant -- Streamlit web UI
-streamlit run src/app/chat_app.py
+PYTHONPATH=.deps:. python3 -m streamlit run src/app/chat_app.py
 ```
+
+> **Note:** Use `python3 -m streamlit run ...`, not the bare `streamlit` command.
+> Since dependencies here are installed to `.deps/` via `pip install --target`
+> (sandbox workaround) rather than a real virtualenv, no `streamlit` executable
+> gets placed on your `PATH` -- only the importable package. If you instead set
+> up a normal `venv` and `pip install -r requirements.txt` there, the plain
+> `streamlit run src/app/chat_app.py` command will work as usual.
 
 > **Note:** The Streamlit app's `global.developmentMode` auto-detection gets
 > confused when dependencies are installed to a non-standard path like `.deps/`
