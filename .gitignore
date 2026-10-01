@@ -1,0 +1,9 @@
+.deps/
+.home/
+.venv/
+venv/
+__pycache__/
+*.pyc
+data/processed/chroma_db/
+.DS_Store
+.env
