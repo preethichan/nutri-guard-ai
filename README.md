@@ -17,7 +17,8 @@ A guardrailed RAG assistant project, inspired by DeepLearning.AI's *Safe and Rel
 - [x] Real, sourced knowledge base (`data/raw/`) — 8 documents, no mock data
 - [x] Vector store ingestion pipeline (`src/rag/ingest.py`) using Chroma (local, offline embeddings)
 - [x] Retrieval sanity-checked (`src/rag/query.py`)
-- [ ] Baseline RAG chatbot (reproduce failure modes, "before" state)
+- [x] Baseline RAG chatbot (reproduce failure modes, "before" state) — `src/rag/chat.py` (CLI) and `src/app/chat_app.py` (Streamlit UI)
+- [x] Baseline evaluation harness (golden set, unanswerable set, synthetic adversarial set, DeepEval + Presidio metrics) — see `docs/eval_reports/`
 - [ ] Input guardrails (scope, prompt-injection, PII detection)
 - [ ] Retrieval guardrails (relevance threshold, source attribution)
 - [ ] Output guardrails (groundedness/faithfulness, PII leak filter, medical-scope filter)
@@ -36,9 +37,20 @@ src/
   rag/
     ingest.py        # Chunk + embed data/raw/*.md into the Chroma vector store
     query.py         # CLI tool to test retrieval against the vector store
-  guardrails/         # (upcoming) input/output/retrieval guardrails
-tests/                # (upcoming) adversarial test suite
-docs/                 # (upcoming) design notes
+    chat.py          # Baseline (no guardrails) chat pipeline, CLI entry point
+    system_prompt.py # System prompt for the assistant
+  app/
+    chat_app.py      # Streamlit chat UI over the same baseline ChatSession
+  eval/                # Eval harness: golden/synthetic/unanswerable set builders,
+                       # metrics (retrieval, faithfulness, scope, PII/PHI, hallucination),
+                       # and the eval runner (run_eval.py)
+  guardrails/          # (upcoming) input/output/retrieval guardrails
+tests/
+  golden/              # Mechanically-derived Q&A pairs from the KB (retrieval/faithfulness)
+  synthetic/           # LLM-generated adversarial/realistic query set (scope, PII, compliance)
+  unanswerable/        # LLM-generated unanswerable questions (hallucination stress test)
+docs/
+  eval_reports/        # Baseline eval run reports (JSON + Markdown)
 ```
 
 ## Setup
@@ -57,6 +69,32 @@ python -m src.rag.ingest
 
 # Test retrieval
 python -m src.rag.query "How does alcohol affect triglycerides?"
+
+# Chat with the baseline (no guardrails) assistant -- CLI
+python -m src.rag.chat                           # interactive loop
+python -m src.rag.chat --once "question here"    # single turn
+
+# Chat with the baseline assistant -- Streamlit web UI
+streamlit run src/app/chat_app.py
+```
+
+> **Note:** The Streamlit app's `global.developmentMode` auto-detection gets
+> confused when dependencies are installed to a non-standard path like `.deps/`
+> (as in this sandboxed build) rather than a real `site-packages`. If you hit
+> `RuntimeError: server.port does not work when global.developmentMode is true`
+> or the browser URL points at a dead `:3000`, it's already worked around via
+> `.streamlit/config.toml` (`global.developmentMode = false`). On a normal
+> `pip install` (no `--target`), this wouldn't happen in the first place.
+
+### Baseline evaluation
+```bash
+# Generate the golden/synthetic/unanswerable question sets (one-time, uses Claude)
+python -m src.eval.build_golden_set
+python -m src.eval.generate_synthetic_queries
+python -m src.eval.build_unanswerable_set
+
+# Run the full baseline eval (golden + unanswerable + synthetic), writes a report to docs/eval_reports/
+python -m src.eval.run_eval --tag baseline
 ```
 
 ## Scope & disclaimer

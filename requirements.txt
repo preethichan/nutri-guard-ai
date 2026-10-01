@@ -4,3 +4,4 @@ anthropic>=0.40.0
 python-dotenv>=1.0.1
 deepeval>=2.0.0
 presidio-analyzer>=2.2.0
+streamlit>=1.38.0
