@@ -5,5 +5,7 @@ venv/
 __pycache__/
 *.pyc
 data/processed/chroma_db/
+data/processed/conversation_logs/
+.run_logs/
 .DS_Store
 .env
