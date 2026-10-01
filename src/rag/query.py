@@ -22,6 +22,25 @@ def get_collection() -> chromadb.Collection:
     return client.get_collection(COLLECTION_NAME)
 
 
+def retrieve(question: str, n_results: int = 3) -> list[dict]:
+    """Reusable retrieval function for the RAG chat pipeline and eval harness.
+
+    Returns a list of dicts: {"text", "metadata", "score"} ordered by
+    relevance (score = 1 - cosine distance, higher is more relevant).
+    """
+    collection = get_collection()
+    results = collection.query(query_texts=[question], n_results=n_results)
+
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    dists = results["distances"][0]
+
+    return [
+        {"text": doc, "metadata": meta, "score": 1 - dist}
+        for doc, meta, dist in zip(docs, metas, dists)
+    ]
+
+
 def query(question: str, n_results: int = 3):
     collection = get_collection()
     results = collection.query(query_texts=[question], n_results=n_results)
