@@ -14,7 +14,7 @@ load_dotenv()
 DEFAULT_MODEL = os.environ.get("NUTRIGUARD_MODEL", "claude-sonnet-4-5-20250929")
 # A cheaper/faster model is fine for judging; default to the same model
 # family for consistency unless overridden.
-DEFAULT_JUDGE_MODEL = os.environ.get("NUTRIGUARD_JUDGE_MODEL", "claude-3-5-haiku-20241022")
+DEFAULT_JUDGE_MODEL = os.environ.get("NUTRIGUARD_JUDGE_MODEL", "claude-haiku-4-5-20251001")
 
 
 def require_api_key():

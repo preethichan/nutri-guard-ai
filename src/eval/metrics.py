@@ -19,11 +19,20 @@ from dataclasses import dataclass
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
 from deepeval.test_case import LLMTestCase
 from presidio_analyzer import AnalyzerEngine
+from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 from src.eval.claude_client import ClaudeDeepEvalModel, simple_generate
 
 _judge_model = None
 _presidio_analyzer = None
+
+# Use the small spaCy model (en_core_web_sm) instead of Presidio's default
+# en_core_web_lg -- lighter to install/run, and sufficient for detecting
+# PERSON/LOCATION-style entities in this project's PII leakage checks.
+_NLP_CONFIG = {
+    "nlp_engine_name": "spacy",
+    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+}
 
 
 def get_judge_model() -> ClaudeDeepEvalModel:
@@ -36,7 +45,8 @@ def get_judge_model() -> ClaudeDeepEvalModel:
 def get_presidio_analyzer() -> AnalyzerEngine:
     global _presidio_analyzer
     if _presidio_analyzer is None:
-        _presidio_analyzer = AnalyzerEngine()
+        nlp_engine = NlpEngineProvider(nlp_configuration=_NLP_CONFIG).create_engine()
+        _presidio_analyzer = AnalyzerEngine(nlp_engine=nlp_engine)
     return _presidio_analyzer
 
 
