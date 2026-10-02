@@ -231,8 +231,10 @@ class GuardedChatSession:
             "retrieved_chunks": retrieved_chunks,
             "pii_redacted": redaction.redacted,
             "pii_redaction_findings": redaction.findings,
+            "low_confidence_retrieval": bool(addendum),
             "guardrail_triggered": judge.any_violation,
             "remediated": remediated,
+            "fallback_used": bool(judge_retry and judge_retry.any_violation),
         }
 
 

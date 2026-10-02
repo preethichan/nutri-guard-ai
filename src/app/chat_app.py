@@ -1,10 +1,14 @@
 """
-Streamlit chat UI for the NutriGuard baseline (un-guarded) RAG assistant.
+Streamlit chat UI for the NutriGuard RAG assistant -- baseline and guardrailed
+pipelines, side by side behind a single toggle.
 
-This is a thin UI layer over src.rag.chat.ChatSession -- it adds no guardrails
-of its own. It exists so a human can interactively poke at the SAME baseline
-pipeline that src/eval/run_eval.py measures, to build intuition before the
-guardrailed version exists.
+Baseline (src.rag.chat.ChatSession) adds no guardrails of its own; it's the
+"before" state measured in docs/eval_reports/baseline_v2_*. Guardrailed
+(src.rag.chat_guarded.GuardedChatSession) adds the three layers described in
+README.md ("Guardrails" section) and measured in docs/eval_reports/guarded_v1_*.
+Switching the toggle starts a fresh conversation on the selected pipeline --
+the two are not meant to share history, since they log to different files
+and (for the guarded pipeline) redact before anything is stored.
 
 Run with:
     PYTHONPATH=.deps:. streamlit run src/app/chat_app.py
@@ -27,36 +31,77 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from src.rag.chat import ChatSession, DEFAULT_MODEL  # noqa: E402
+from src.rag.chat import ChatSession  # noqa: E402
+from src.rag.chat_guarded import GuardedChatSession  # noqa: E402
 
-st.set_page_config(page_title="NutriGuard Assistant (Baseline)", page_icon="🩺")
+st.set_page_config(page_title="NutriGuard Assistant", page_icon="🩺")
+
+PIPELINES = {
+    "Baseline": ChatSession,
+    "Guardrailed": GuardedChatSession,
+}
 
 
-def _get_session() -> ChatSession:
-    if "chat_session" not in st.session_state:
-        st.session_state.chat_session = ChatSession()
-        st.session_state.messages = []  # [{"role", "content", "chunks"?}]
+def _get_session() -> ChatSession | GuardedChatSession:
+    pipeline = st.session_state.pipeline
+    if (
+        "chat_session" not in st.session_state
+        or st.session_state.get("active_pipeline") != pipeline
+    ):
+        st.session_state.chat_session = PIPELINES[pipeline]()
+        st.session_state.messages = []  # [{"role", "content", "chunks"?, "meta"?}]
+        st.session_state.active_pipeline = pipeline
     return st.session_state.chat_session
 
 
 def _reset_session():
-    st.session_state.chat_session = ChatSession()
+    pipeline = st.session_state.pipeline
+    st.session_state.chat_session = PIPELINES[pipeline]()
     st.session_state.messages = []
+    st.session_state.active_pipeline = pipeline
+
+
+def _render_sources(chunks: list[dict]):
+    with st.expander("Retrieved sources"):
+        for c in chunks:
+            m = c["metadata"]
+            st.markdown(
+                f"**[{c['score']:.3f}]** {m['source_org']} -- "
+                f"{m['title']} ({m['heading']})  \n"
+                f"[{m['url']}]({m['url']})"
+            )
+
+
+def _render_guardrail_badges(meta: dict):
+    """Small inline indicators showing which guardrail layers fired on this turn."""
+    badges = []
+    if meta.get("pii_redacted"):
+        entities = sorted({f["entity_type"] for f in meta.get("pii_redaction_findings", [])})
+        badges.append(f"🔒 PII redacted ({', '.join(entities)})")
+    if meta.get("low_confidence_retrieval"):
+        badges.append("📉 Low-confidence retrieval -- nudge applied")
+    if meta.get("guardrail_triggered"):
+        badges.append(
+            "🛡️ Output guardrail triggered -- regenerated"
+            + (" (fallback used)" if meta.get("fallback_used") else "")
+        )
+    if badges:
+        st.caption(" · ".join(badges))
 
 
 def main():
     st.title("🩺 NutriGuard Assistant")
     st.caption("Triglyceride & nutrition guidance, grounded in WHO / NIH / AHA / USDA sources.")
 
-    st.warning(
-        "⚠️ **Baseline pipeline -- no guardrails.** This build has no PII redaction, "
-        "no scope filtering, and no output/groundedness checks by design (it's the "
-        "'before' state being measured in `docs/eval_reports/`). Conversation turns, "
-        "including anything sensitive you type, are logged **unredacted** to "
-        "`data/processed/conversation_logs/`. Please don't share real personal or "
-        "health information -- use fictional details if you want to test that behavior.",
-        icon="⚠️",
-    )
+    if "pipeline" not in st.session_state:
+        st.session_state.pipeline = "Baseline"
+
+    st.session_state.pipeline = st.segmented_control(
+        "Pipeline",
+        options=list(PIPELINES.keys()),
+        default=st.session_state.pipeline,
+        label_visibility="collapsed",
+    ) or st.session_state.pipeline
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         st.error(
@@ -67,8 +112,31 @@ def main():
 
     session = _get_session()
 
+    if st.session_state.pipeline == "Baseline":
+        st.warning(
+            "**Baseline pipeline -- no guardrails.** No PII redaction, no scope "
+            "filtering, no output/groundedness checks (the 'before' state measured "
+            "in `docs/eval_reports/baseline_v2_*`). Conversation turns are logged "
+            "**unredacted** to `data/processed/conversation_logs/`. Please don't "
+            "share real personal or health information -- use fictional details if "
+            "you want to test that behavior.",
+            icon="⚠️",
+        )
+    else:
+        st.success(
+            "**Guardrailed pipeline active.** Input PII redaction, a retrieval-"
+            "confidence nudge, and a combined output groundedness/scope/overclaim "
+            "judge with bounded remediation (the 'after' state measured in "
+            "`docs/eval_reports/guarded_v1_*`). Identifying PII (name/email/phone/"
+            "location) is stripped before logging; clinically-relevant terms "
+            "(medication/condition/lab value) are intentionally preserved. See "
+            "`docs/guardrails_before_after.md`.",
+            icon="🛡️",
+        )
+
     with st.sidebar:
         st.subheader("Session")
+        st.text(f"Pipeline: {st.session_state.pipeline}")
         st.text(f"Model: {session.model}")
         st.text(f"Session ID: {session.session_id[:8]}...")
         st.text(f"Log file:\n{session.log_path.relative_to(PROJECT_ROOT)}")
@@ -78,24 +146,27 @@ def main():
             _reset_session()
             st.rerun()
         st.divider()
-        st.caption(
-            "This is the un-guarded baseline. Guardrailed input/output/retrieval "
-            "layers are planned next -- see README.md project status."
-        )
+        if st.session_state.pipeline == "Guardrailed":
+            st.caption(
+                "Guardrails: input PII redaction · retrieval-confidence nudge · "
+                "output groundedness/scope/overclaim judge + bounded remediation. "
+                "See README.md 'Guardrails' section."
+            )
+        else:
+            st.caption(
+                "Un-guarded baseline. Switch to Guardrailed above for the same "
+                "pipeline with PII redaction and safety checks active."
+            )
 
     # Render prior turns
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            if msg["role"] == "assistant" and show_sources and msg.get("chunks"):
-                with st.expander("Retrieved sources"):
-                    for c in msg["chunks"]:
-                        m = c["metadata"]
-                        st.markdown(
-                            f"**[{c['score']:.3f}]** {m['source_org']} -- "
-                            f"{m['title']} ({m['heading']})  \n"
-                            f"[{m['url']}]({m['url']})"
-                        )
+            if msg["role"] == "assistant":
+                if show_sources and msg.get("chunks"):
+                    _render_sources(msg["chunks"])
+                if msg.get("meta"):
+                    _render_guardrail_badges(msg["meta"])
 
     user_message = st.chat_input("Ask a question about triglycerides, diet, or nutrition...")
     if user_message:
@@ -108,20 +179,15 @@ def main():
                 result = session.send(user_message)
             st.markdown(result["answer"])
             if show_sources and result["retrieved_chunks"]:
-                with st.expander("Retrieved sources"):
-                    for c in result["retrieved_chunks"]:
-                        m = c["metadata"]
-                        st.markdown(
-                            f"**[{c['score']:.3f}]** {m['source_org']} -- "
-                            f"{m['title']} ({m['heading']})  \n"
-                            f"[{m['url']}]({m['url']})"
-                        )
+                _render_sources(result["retrieved_chunks"])
+            _render_guardrail_badges(result)
 
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "content": result["answer"],
                 "chunks": result["retrieved_chunks"],
+                "meta": result,
             }
         )
 
