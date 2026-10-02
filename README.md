@@ -1,10 +1,15 @@
 # nutri-guard-ai
 
-A guardrailed RAG assistant project, inspired by DeepLearning.AI's *Safe and Reliable AI via Guardrails* course — rebuilt around a real, higher-stakes domain instead of the course's toy pizzeria example.
+A RAG assistant will say almost anything to sound helpful — invent a unit-conversion
+factor that doesn't exist, promise a supplement "cures" a condition, or quietly log a
+user's name, email, and medication to a plaintext file. None of that is hypothetical:
+this repo builds a real health-domain assistant with **no guardrails first**, measures
+exactly how often and how badly it fails, and then adds the guardrails needed to fix
+each specific failure — with before/after numbers to prove it, not just a claim.
 
 **Use case:** A dietary/nutrition assistant focused on **triglyceride management** — answering questions grounded in real guidance from WHO, NIH/NHLBI, NIH Office of Dietary Supplements, MedlinePlus, USDA/HHS Dietary Guidelines, and the American Heart Association.
 
-**Why this domain:** Nutrition advice around a real health marker (triglycerides) is a great stress-test for AI reliability because it reproduces all four failure modes the course targets, with real consequences if guardrails fail:
+**Why this domain:** Nutrition advice around a real health marker (triglycerides) is a great stress-test for AI reliability because a chatbot here can fail in four distinct, high-stakes ways — each with real consequences if left unguarded:
 
 | Failure mode | Risk in this domain |
 |---|---|
@@ -12,6 +17,13 @@ A guardrailed RAG assistant project, inspired by DeepLearning.AI's *Safe and Rel
 | Unintended use | Users asking for a diagnosis, medication advice, or treatment of symptoms (e.g., suspected pancreatitis) |
 | Information leakage | Users sharing health conditions, medications, lab results, or other sensitive health data |
 | Reputational/compliance risk | Giving medical-sounding advice a dietary assistant isn't licensed to give |
+
+Measured on the unguarded baseline, before any of this was fixed: **13.3%** of
+genuinely unanswerable questions got a fabricated answer anyway, and **100%** of
+conversations where a user shared identifying personal info (name, email, phone)
+stored it completely unredacted server-side — silently, with no on-screen sign
+anything sensitive had been captured. See [Guardrails](#guardrails) below for what
+changed after adding the three guardrail layers in this repo.
 
 ## Project status
 - [x] Real, sourced knowledge base (`data/raw/`) — 8 documents, no mock data
