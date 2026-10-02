@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 data/processed/chroma_db/
 data/processed/conversation_logs/
+data/processed/conversation_logs_guarded/
 .run_logs/
 .DS_Store
 .env

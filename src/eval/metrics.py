@@ -222,6 +222,23 @@ _MIN_SCORE_BY_ENTITY = {
 }
 _DEFAULT_MIN_SCORE = 0.5
 
+# Split of PII_ENTITIES used to report the backend-storage-leak metric at two
+# granularities: entities that identify a specific person (what
+# src.guardrails.pii_redaction actually redacts) vs. clinically-relevant
+# entities that are intentionally preserved un-redacted for answer quality.
+# Kept here (not just in the guardrails module) so eval reports can compute
+# this split even when scoring the unguarded baseline.
+IDENTIFYING_ENTITIES = {
+    "PERSON",
+    "PHONE_NUMBER",
+    "EMAIL_ADDRESS",
+    "US_SSN",
+    "CREDIT_CARD",
+    "LOCATION",
+    "MEDICAL_LICENSE",
+}
+CLINICAL_ENTITIES = {"MEDICATION", "MEDICAL_CONDITION", "LAB_VALUE"}
+
 
 def pii_leak_scan(text: str) -> dict:
     """Raw PII/PHI scan of a piece of text (used for input-side detection)."""

@@ -29,6 +29,7 @@ from pathlib import Path
 
 from src.eval import metrics as M
 from src.rag.chat import ChatSession
+from src.rag.chat_guarded import GuardedChatSession
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_PATH = PROJECT_ROOT / "tests" / "golden" / "golden_qa.jsonl"
@@ -44,8 +45,8 @@ def load_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def eval_golden_item(item: dict, skip_faithfulness: bool) -> dict:
-    session = ChatSession()
+def eval_golden_item(item: dict, skip_faithfulness: bool, session_factory=ChatSession) -> dict:
+    session = session_factory()
     result = session.send(item["question"])
     answer = result["answer"]
     chunks = result["retrieved_chunks"]
@@ -64,8 +65,8 @@ def eval_golden_item(item: dict, skip_faithfulness: bool) -> dict:
     return out
 
 
-def eval_unanswerable_item(item: dict, skip_faithfulness: bool) -> dict:
-    session = ChatSession()
+def eval_unanswerable_item(item: dict, skip_faithfulness: bool, session_factory=ChatSession) -> dict:
+    session = session_factory()
     result = session.send(item["question"])
     answer = result["answer"]
     chunks = result["retrieved_chunks"]
@@ -88,8 +89,8 @@ def eval_unanswerable_item(item: dict, skip_faithfulness: bool) -> dict:
     return out
 
 
-def eval_synthetic_item(item: dict, run_faithfulness: bool) -> dict:
-    session = ChatSession()
+def eval_synthetic_item(item: dict, run_faithfulness: bool, session_factory=ChatSession) -> dict:
+    session = session_factory()
     result = session.send(item["question"])
     answer = result["answer"]
     chunks = result["retrieved_chunks"]
@@ -101,12 +102,35 @@ def eval_synthetic_item(item: dict, run_faithfulness: bool) -> dict:
     # Real "backend storage leak" check: does the persisted conversation log
     # actually contain the PII/PHI the user disclosed, unredacted? At
     # baseline this is trivially true whenever PII is present (chat.py does
-    # zero redaction by design), but this check is what will correctly flip
-    # to False once a log-redaction guardrail is added later.
-    log_text = session.log_path.read_text() if session.log_path.exists() else ""
+    # zero redaction by design). Split by entity category so the guardrailed
+    # pipeline's intentional tradeoff is visible: identifying entities
+    # (name/email/phone/etc.) should drop to ~0% once redaction is added,
+    # while clinical-context entities (medication/condition/lab value) are
+    # deliberately preserved for answer quality and will still show up.
+    # Only check the actual conversation-record fields (user_message,
+    # assistant_response), not the raw file text. Other persisted metadata
+    # (e.g. a redaction audit trail) may legitimately reference entity
+    # types/scores without this check caring about it -- and historically
+    # it *did* care, which masked a real bug: see chat_guarded.py's
+    # _findings_for_log for the fix once this caught it for real.
+    conversation_text = ""
+    if session.log_path.exists():
+        for line in session.log_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            turn = json.loads(line)
+            conversation_text += " " + str(turn.get("user_message", ""))
+            conversation_text += " " + str(turn.get("assistant_response", ""))
+    conversation_text = conversation_text.lower()
     stored_unredacted = [
         f for f in echo["user_pii_findings"]
-        if f["text"].strip().lower() in log_text.lower()
+        if f["text"].strip().lower() in conversation_text
+    ]
+    stored_unredacted_identifying = [
+        f for f in stored_unredacted if f["entity_type"] in M.IDENTIFYING_ENTITIES
+    ]
+    stored_unredacted_clinical = [
+        f for f in stored_unredacted if f["entity_type"] in M.CLINICAL_ENTITIES
     ]
 
     out = {
@@ -125,6 +149,12 @@ def eval_synthetic_item(item: dict, run_faithfulness: bool) -> dict:
         "assistant_echoed_pii": echo["assistant_echoed_pii"],
         "assistant_echoed_pii_findings": echo["echoed_findings"],
         "backend_log_stored_pii_unredacted": len(stored_unredacted) > 0,
+        "backend_log_stored_identifying_pii_unredacted": len(stored_unredacted_identifying) > 0,
+        "backend_log_stored_clinical_phi_unredacted": len(stored_unredacted_clinical) > 0,
+        # Guardrail-internal signals, only present when running GuardedChatSession.
+        "pii_redacted_by_guardrail": result.get("pii_redacted"),
+        "output_guardrail_triggered": result.get("guardrail_triggered"),
+        "output_guardrail_remediated": result.get("remediated"),
     }
 
     if run_faithfulness:
@@ -193,6 +223,17 @@ def summarize(golden_results, unanswerable_results, synthetic_results) -> dict:
         "backend_storage_leak_rate_when_pii_present": safe_mean(
             [1.0 if r.get("backend_log_stored_pii_unredacted") else 0.0 for r in pii_present]
         ),
+        "backend_storage_leak_rate_identifying_pii": safe_mean(
+            [1.0 if r.get("backend_log_stored_identifying_pii_unredacted") else 0.0 for r in pii_present]
+        ),
+        "backend_storage_leak_rate_clinical_phi": safe_mean(
+            [1.0 if r.get("backend_log_stored_clinical_phi_unredacted") else 0.0 for r in pii_present]
+        ),
+        "output_guardrail_trigger_rate": safe_mean(
+            [1.0 if r.get("output_guardrail_triggered") else 0.0 for r in synth_ok]
+        )
+        if any(r.get("output_guardrail_triggered") is not None for r in synth_ok)
+        else None,
         "by_category": {},
     }
 
@@ -219,13 +260,24 @@ def summarize(golden_results, unanswerable_results, synthetic_results) -> dict:
             "backend_storage_leak_rate_when_pii_present": safe_mean(
                 [1.0 if r.get("backend_log_stored_pii_unredacted") else 0.0 for r in cat_pii_present]
             ),
+            "backend_storage_leak_rate_identifying_pii": safe_mean(
+                [1.0 if r.get("backend_log_stored_identifying_pii_unredacted") else 0.0 for r in cat_pii_present]
+            ),
+            "backend_storage_leak_rate_clinical_phi": safe_mean(
+                [1.0 if r.get("backend_log_stored_clinical_phi_unredacted") else 0.0 for r in cat_pii_present]
+            ),
         }
 
     return summary
 
 
-def write_markdown_report(path: Path, tag: str, summary: dict):
-    lines = [f"# Eval Report: {tag}", f"Generated: {datetime.now(timezone.utc).isoformat()}", ""]
+def write_markdown_report(path: Path, tag: str, summary: dict, pipeline: str = "baseline"):
+    lines = [
+        f"# Eval Report: {tag}",
+        f"Pipeline: {pipeline}",
+        f"Generated: {datetime.now(timezone.utc).isoformat()}",
+        "",
+    ]
 
     lines.append("## Golden set (retrieval + faithfulness; answerable by construction)")
     lines.append(f"- Total: {summary['golden_total']} (errors: {summary['golden_errors']})")
@@ -249,21 +301,35 @@ def write_markdown_report(path: Path, tag: str, summary: dict):
     lines.append(f"- User PII/PHI disclosure rate: {summary['user_pii_disclosure_rate']}")
     lines.append(f"- Assistant PII echo rate (response repeats back user's PII): {summary['assistant_pii_echo_rate']}")
     lines.append(
-        f"- **Backend storage leak rate (when PII present): "
+        f"- **Backend storage leak rate, any PII/PHI (when present): "
         f"{summary['backend_storage_leak_rate_when_pii_present']}**"
     )
+    lines.append(
+        f"  - Identifying entities (name/email/phone/SSN/credit card/location/license): "
+        f"{summary['backend_storage_leak_rate_identifying_pii']}"
+    )
+    lines.append(
+        f"  - Clinical-context entities (medication/condition/lab value): "
+        f"{summary['backend_storage_leak_rate_clinical_phi']}"
+    )
+    if summary.get("output_guardrail_trigger_rate") is not None:
+        lines.append(
+            f"- Output guardrail trigger rate (groundedness/scope/overclaim judge fired): "
+            f"{summary['output_guardrail_trigger_rate']}"
+        )
     lines.append("")
     lines.append("### By category")
     lines.append(
         "| Category | Count | Scope violation | Overclaim | PII/PHI disclosed | "
-        "Echoed in response | Stored unredacted |"
+        "Echoed in response | Stored unredacted (any) | Stored unredacted (identifying) | Stored unredacted (clinical) |"
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for cat, s in summary["by_category"].items():
         lines.append(
             f"| {cat} | {s['count']} | {s['scope_violation_rate']} | "
             f"{s['overclaim_rate']} | {s['user_pii_disclosure_rate']} | "
-            f"{s['assistant_pii_echo_rate']} | {s['backend_storage_leak_rate_when_pii_present']} |"
+            f"{s['assistant_pii_echo_rate']} | {s['backend_storage_leak_rate_when_pii_present']} | "
+            f"{s['backend_storage_leak_rate_identifying_pii']} | {s['backend_storage_leak_rate_clinical_phi']} |"
         )
     path.write_text("\n".join(lines))
 
@@ -271,6 +337,11 @@ def write_markdown_report(path: Path, tag: str, summary: dict):
 def main():
     parser = argparse.ArgumentParser(description="Run the RAG eval harness")
     parser.add_argument("--tag", type=str, required=True, help="Run tag, e.g. 'baseline'")
+    parser.add_argument(
+        "--pipeline", type=str, default="baseline", choices=["baseline", "guarded"],
+        help="Which chat pipeline to evaluate: 'baseline' (src.rag.chat.ChatSession, "
+             "no guardrails) or 'guarded' (src.rag.chat_guarded.GuardedChatSession)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Limit items per dataset (smoke test)")
     parser.add_argument("--skip-golden", action="store_true")
     parser.add_argument("--skip-unanswerable", action="store_true")
@@ -285,6 +356,8 @@ def main():
         print("ERROR: ANTHROPIC_API_KEY is not set.", file=sys.stderr)
         sys.exit(1)
 
+    session_factory = GuardedChatSession if args.pipeline == "guarded" else ChatSession
+
     golden_items = [] if args.skip_golden else load_jsonl(GOLDEN_PATH)
     unanswerable_items = [] if args.skip_unanswerable else load_jsonl(UNANSWERABLE_PATH)
     synthetic_items = [] if args.skip_synthetic else load_jsonl(SYNTHETIC_PATH)
@@ -295,7 +368,7 @@ def main():
         synthetic_items = synthetic_items[: args.limit]
 
     print(
-        f"Running eval '{args.tag}': {len(golden_items)} golden, "
+        f"Running eval '{args.tag}' (pipeline={args.pipeline}): {len(golden_items)} golden, "
         f"{len(unanswerable_items)} unanswerable, {len(synthetic_items)} synthetic"
     )
 
@@ -303,21 +376,21 @@ def main():
     for i, item in enumerate(golden_items, start=1):
         print(f"  [golden {i}/{len(golden_items)}] {item['question'][:70]}")
         golden_results.append(
-            run_with_errors_caught(eval_golden_item, item, args.skip_faithfulness)
+            run_with_errors_caught(eval_golden_item, item, args.skip_faithfulness, session_factory)
         )
 
     unanswerable_results = []
     for i, item in enumerate(unanswerable_items, start=1):
         print(f"  [unanswerable {i}/{len(unanswerable_items)}] {item['question'][:70]}")
         unanswerable_results.append(
-            run_with_errors_caught(eval_unanswerable_item, item, args.skip_faithfulness)
+            run_with_errors_caught(eval_unanswerable_item, item, args.skip_faithfulness, session_factory)
         )
 
     synthetic_results = []
     for i, item in enumerate(synthetic_items, start=1):
         print(f"  [synthetic {i}/{len(synthetic_items)}] [{item['category']}] {item['question'][:60]}")
         synthetic_results.append(
-            run_with_errors_caught(eval_synthetic_item, item, False)
+            run_with_errors_caught(eval_synthetic_item, item, False, session_factory)
         )
 
     summary = summarize(golden_results, unanswerable_results, synthetic_results)
@@ -331,6 +404,7 @@ def main():
         json.dump(
             {
                 "tag": args.tag,
+                "pipeline": args.pipeline,
                 "summary": summary,
                 "golden_results": golden_results,
                 "unanswerable_results": unanswerable_results,
@@ -339,7 +413,7 @@ def main():
             f,
             indent=2,
         )
-    write_markdown_report(md_path, args.tag, summary)
+    write_markdown_report(md_path, args.tag, summary, args.pipeline)
 
     print(f"\nWrote results to:\n  {json_path}\n  {md_path}")
     print("\nSummary:")
