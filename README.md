@@ -25,8 +25,8 @@ A guardrailed RAG assistant project, inspired by DeepLearning.AI's *Safe and Rel
 - [x] Output guardrail — combined groundedness/scope/overclaim judge + bounded remediation (`src/guardrails/output_judge.py`)
 - [x] Guardrailed chat pipeline (`src/rag/chat_guarded.py`, `GuardedChatSession`) — "after" state, same `send()` interface as the baseline
 - [x] Guardrailed pipeline run through the full eval harness, "after" report — see `docs/eval_reports/guarded_v1_*` and `docs/guardrails_before_after.md`
-- [ ] Baseline/Guardrailed toggle in the Streamlit app for a live side-by-side demo
-- [ ] "After" screenshots matching the recorded baseline evidence
+- [x] Baseline/Guardrailed toggle in the Streamlit app for a live side-by-side demo
+- [x] "After" screenshots matching the recorded baseline evidence — see `docs/guarded_evidence/`
 
 ## Data sourcing
 See [`data/SOURCES.md`](data/SOURCES.md) for the full manifest of real sources used (WHO, NIH/NHLBI, NIH ODS, MedlinePlus, USDA/HHS, AHA), each fetched live and attributed with URL + retrieval date in the document frontmatter. No synthetic/mock content was used.
@@ -58,7 +58,8 @@ tests/
   unanswerable/        # LLM-generated unanswerable questions (hallucination stress test)
 docs/
   eval_reports/        # Baseline + guardrailed eval run reports (JSON + Markdown)
-  baseline_evidence/   # Screenshots + transcripts of baseline (pre-guardrail) failure modes
+  baseline_evidence/   # "Before" screenshots + transcripts (baseline, pre-guardrail)
+  guarded_evidence/    # "After" screenshots -- same questions, guardrailed pipeline
   guardrails_before_after.md  # Before/after comparison write-up (baseline_v2 vs guarded_v1)
 ```
 
@@ -83,7 +84,7 @@ python -m src.rag.query "How does alcohol affect triglycerides?"
 python -m src.rag.chat                           # interactive loop
 python -m src.rag.chat --once "question here"    # single turn
 
-# Chat with the baseline assistant -- Streamlit web UI
+# Chat with either pipeline -- Streamlit web UI (Baseline/Guardrailed toggle at the top)
 PYTHONPATH=.deps:. python3 -m streamlit run src/app/chat_app.py
 
 # Chat with the guardrailed assistant -- CLI (input PII redaction, retrieval
